@@ -2,6 +2,7 @@ using Amazon;
 using Amazon.S3;
 using Amazon.SQS;
 using CloudConverter.Api.Data;
+using CloudConverter.Api.Hubs;
 using CloudConverter.Api.Services;
 using Microsoft.EntityFrameworkCore;
 
@@ -19,13 +20,16 @@ builder.Services.AddDbContext<ApplicationDbContext>(options =>
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+builder.Services.AddSignalR();
 
+var clientOrigin = builder.Configuration["CLIENT_URL"] ?? "http://localhost:5173";
 builder.Services.AddCors(options =>
 {
-    options.AddDefaultPolicy(policy => policy
+    options.AddPolicy("ClientCors", policy => policy
+        .WithOrigins(clientOrigin)
         .AllowAnyHeader()
         .AllowAnyMethod()
-        .AllowAnyOrigin());
+        .AllowCredentials());
 });
 
 var awsRegion = builder.Configuration["AWS:Region"] ?? builder.Configuration["AWS__Region"] ?? "us-east-1";
@@ -71,6 +75,15 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
     db.Database.EnsureCreated();
+    try
+    {
+        // Ensure Tags column exists (MySQL prior to 8.0.29 may not support IF NOT EXISTS)
+        db.Database.ExecuteSqlRaw("ALTER TABLE Videos ADD COLUMN Tags longtext NULL;");
+    }
+    catch
+    {
+        // ignore if column already exists or table not created yet
+    }
 }
 
 if (app.Environment.IsDevelopment())
@@ -79,9 +92,11 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-app.UseCors();
+app.UseRouting();
+app.UseCors("ClientCors");
 app.UseAuthorization();
 app.MapControllers();
+app.MapHub<VideoHub>("/hub/video");
 
 app.Run();
 

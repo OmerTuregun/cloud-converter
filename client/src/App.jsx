@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { HubConnectionBuilder } from "@microsoft/signalr";
 
 const API_BASE =
   import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ||
@@ -9,13 +10,21 @@ function App() {
   const [status, setStatus] = useState("");
   const [videos, setVideos] = useState([]);
   const [isUploading, setIsUploading] = useState(false);
+   const connectionRef = useRef(null);
 
   const fetchVideos = async () => {
     try {
       const res = await fetch(`${API_BASE}/api/videos`);
       if (!res.ok) throw new Error("List failed");
       const data = await res.json();
-      setVideos(data);
+      setVideos((prev) => {
+        // merge to keep transient progress if exists
+        const byId = new Map(prev.map((v) => [v.id, v]));
+        return data.map((item) => {
+          const existing = byId.get(item.id);
+          return existing ? { ...item, progress: existing.progress } : item;
+        });
+      });
     } catch (err) {
       console.error(err);
     }
@@ -25,6 +34,38 @@ function App() {
     fetchVideos();
     const interval = setInterval(fetchVideos, 5000);
     return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    if (connectionRef.current) return;
+
+    const conn = new HubConnectionBuilder()
+      .withUrl(`${API_BASE}/hub/video`, { withCredentials: true })
+      .withAutomaticReconnect()
+      .build();
+
+    conn.on("progress", (payload) => {
+      console.debug("Progress event:", payload);
+      setVideos((prev) =>
+        prev.map((v) =>
+          v.id === payload.videoId
+            ? {
+                ...v,
+                status: payload.status ?? v.status,
+                progress: payload.percent ?? v.progress,
+                thumbnailUrl: payload.thumbnailUrl ?? v.thumbnailUrl,
+                tags: payload.tags ?? v.tags,
+              }
+            : v
+        )
+      );
+    });
+
+    conn.start().catch((err) => console.error("SignalR error", err));
+    connectionRef.current = conn;
+    return () => {
+      conn.stop().catch(() => {});
+    };
   }, []);
 
   const handleUpload = async () => {
@@ -47,6 +88,7 @@ function App() {
       const { uploadUrl, s3Key } = await initRes.json();
 
       setStatus("S3'e yükleniyor...");
+      console.debug("Init OK, s3Key:", s3Key);
       const uploadRes = await fetch(uploadUrl, {
         method: "PUT",
         body: file,
@@ -55,6 +97,7 @@ function App() {
       if (!uploadRes.ok) throw new Error("S3 yüklemesi başarısız.");
 
       setStatus("Backend'e bildirim gönderiliyor...");
+      console.debug("S3 upload OK, notifying complete");
       const completeRes = await fetch(`${API_BASE}/api/upload/complete`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -125,7 +168,9 @@ function App() {
                   <th className="py-2 pr-4">ID</th>
                   <th className="py-2 pr-4">Dosya</th>
                   <th className="py-2 pr-4">Durum</th>
+                  <th className="py-2 pr-4">İlerleme</th>
                   <th className="py-2 pr-4">Thumbnail</th>
+                  <th className="py-2 pr-4">Etiketler</th>
                   <th className="py-2 pr-4">Oluşturma</th>
                 </tr>
               </thead>
@@ -146,6 +191,13 @@ function App() {
                       </span>
                     </td>
                     <td className="py-2 pr-4">
+                      {v.status !== "Completed" && v.progress
+                        ? `${v.progress}%`
+                        : v.status === "Completed"
+                        ? "100%"
+                        : "-"}
+                    </td>
+                    <td className="py-2 pr-4">
                       {v.thumbnailUrl ? (
                         <a
                           href={v.thumbnailUrl}
@@ -159,6 +211,7 @@ function App() {
                         "-"
                       )}
                     </td>
+                    <td className="py-2 pr-4">{v.tags || "-"}</td>
                     <td className="py-2 pr-4">
                       {new Date(v.createdAt).toLocaleString()}
                     </td>

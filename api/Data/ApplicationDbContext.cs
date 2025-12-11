@@ -18,6 +18,7 @@ public class ApplicationDbContext : DbContext
             entity.Property(v => v.FileName).IsRequired();
             entity.Property(v => v.Status).IsRequired();
             entity.Property(v => v.S3Url).IsRequired();
+            entity.Property(v => v.Tags);
             entity.Property(v => v.CreatedAt)
                 .HasDefaultValueSql("CURRENT_TIMESTAMP(6)")
                 .ValueGeneratedOnAdd();

@@ -36,6 +36,8 @@ services:
       AWS__SQS__QueueUrl: ${AWS_SQS_QUEUE_URL}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      CLIENT_URL: ${CLIENT_URL:-http://localhost:5173}
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:-changeme}
     ports:
       - "5000:8080"
     networks:
@@ -60,8 +62,13 @@ services:
       AWS_SQS_QUEUE_URL: ${AWS_SQS_QUEUE_URL}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      PROGRESS_API_URL: ${PROGRESS_API_URL:-http://api:8080/api/internal/progress}
+      PROGRESS_API_KEY: ${INTERNAL_API_KEY:-changeme}
     networks:
       - cloud-net
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
 
   client:
     build: ./client

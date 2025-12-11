@@ -8,6 +8,7 @@ from pathlib import Path
 import boto3
 import ffmpeg
 import pymysql
+import requests
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("worker")
@@ -64,20 +65,43 @@ def create_thumbnail(input_path: Path, output_path: Path):
 
 
 def upload_file(s3, bucket: str, key: str, file_path: Path):
-    # Upload thumbnail; bucket policy (not ACL) should grant read if public access is needed
     s3.upload_file(str(file_path), bucket, key)
     logger.info("Uploaded %s to s3://%s/%s", file_path, bucket, key)
 
 
-def mark_video_completed(video_id: int, thumbnail_url: str):
+def mark_video_completed(video_id: int, thumbnail_url: str, tags: str | None):
     with get_db_connection() as conn:
         with conn.cursor() as cursor:
             cursor.execute(
-                "UPDATE Videos SET Status=%s, ThumbnailUrl=%s WHERE Id=%s",
-                ("Completed", thumbnail_url, video_id),
+                "UPDATE Videos SET Status=%s, ThumbnailUrl=%s, Tags=%s WHERE Id=%s",
+                ("Completed", thumbnail_url, tags, video_id),
             )
         conn.commit()
     logger.info("Video %s marked completed", video_id)
+
+
+def send_progress(video_id: int, status: str, percent: int | None = None):
+    url = os.getenv("PROGRESS_API_URL", "http://api:8080/api/internal/progress")
+    api_key = os.getenv("PROGRESS_API_KEY")
+    if not api_key:
+        return
+    try:
+        payload = {"videoId": video_id, "status": status}
+        if percent is not None:
+            payload["percent"] = percent
+        resp = requests.post(url, json=payload, headers={"X-Api-Key": api_key}, timeout=5)
+        if resp.status_code >= 300:
+            logger.warning("Progress post failed %s: %s", resp.status_code, resp.text)
+    except Exception as exc:
+        logger.warning("Progress post error: %s", exc)
+
+
+def detect_labels(rekognition, image_path: Path) -> str:
+    with image_path.open("rb") as f:
+        bytes_data = f.read()
+    response = rekognition.detect_labels(Image={"Bytes": bytes_data}, MaxLabels=10, MinConfidence=80)
+    labels = [lbl["Name"] for lbl in response.get("Labels", []) if lbl.get("Confidence", 0) >= 80]
+    return ", ".join(labels[:5]) if labels else ""
 
 
 def process_message(s3, message_body: str, bucket: str, service_url: str | None):
@@ -90,8 +114,23 @@ def process_message(s3, message_body: str, bucket: str, service_url: str | None)
         video_path = tmpdir_path / "input_video"
         thumb_path = tmpdir_path / "thumb.jpg"
 
+        send_progress(video_id, "Processing", 0)
         download_video(s3, bucket, s3_key, video_path)
+        send_progress(video_id, "Processing", 30)
         create_thumbnail(video_path, thumb_path)
+        send_progress(video_id, "Processing", 60)
+
+        rekognition = build_boto_client("rekognition")
+        tags = ""
+        try:
+            tags = detect_labels(rekognition, thumb_path)
+            if tags:
+                logger.info("Rekognition tags for video %s: %s", video_id, tags)
+            else:
+                logger.info("Rekognition found no tags for video %s", video_id)
+            send_progress(video_id, "Processing", 80)
+        except Exception as exc:
+            logger.warning("Rekognition failed: %s", exc)
 
         thumb_key = s3_key.rsplit(".", 1)[0] + ".jpg"
         upload_file(s3, bucket, thumb_key, thumb_path)
@@ -101,7 +140,8 @@ def process_message(s3, message_body: str, bucket: str, service_url: str | None)
         else:
             thumbnail_url = f"https://{bucket}.s3.amazonaws.com/{thumb_key}"
 
-        mark_video_completed(video_id, thumbnail_url)
+        mark_video_completed(video_id, thumbnail_url, tags or None)
+        send_progress(video_id, "Completed", 100)
 
 
 def main():

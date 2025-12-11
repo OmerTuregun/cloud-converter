@@ -7,6 +7,7 @@ public class Video
     public string Status { get; set; } = "Processing";
     public string S3Url { get; set; } = string.Empty;
     public string? ThumbnailUrl { get; set; }
+    public string? Tags { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
 
