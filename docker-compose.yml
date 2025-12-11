@@ -1,0 +1,85 @@
+version: "3.9"
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: cloudconverter-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-cloudconverter}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - cloud-net
+
+  api:
+    build: ./api
+    container_name: cloudconverter-api
+    depends_on:
+      mysql:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__Default: server=mysql;port=3306;database=${MYSQL_DATABASE:-cloudconverter};user=root;password=${MYSQL_ROOT_PASSWORD:-root}
+      AWS__Region: ${AWS_REGION}
+      AWS__S3__BucketName: ${AWS_S3_BUCKET}
+      AWS__SQS__QueueUrl: ${AWS_SQS_QUEUE_URL}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+    ports:
+      - "5000:8080"
+    networks:
+      - cloud-net
+
+  worker:
+    build: ./worker
+    container_name: cloudconverter-worker
+    depends_on:
+      mysql:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_NAME: ${MYSQL_DATABASE:-cloudconverter}
+      DB_USER: root
+      DB_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      AWS_REGION: ${AWS_REGION}
+      AWS_S3_BUCKET: ${AWS_S3_BUCKET}
+      AWS_SQS_QUEUE_URL: ${AWS_SQS_QUEUE_URL}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+    networks:
+      - cloud-net
+
+  client:
+    build: ./client
+    container_name: cloudconverter-client
+    depends_on:
+      - api
+    env_file:
+      - .env
+    environment:
+      VITE_API_BASE_URL: http://localhost:5000
+    ports:
+      - "5173:5173"
+    networks:
+      - cloud-net
+
+volumes:
+  mysql-data:
+
+networks:
+  cloud-net:
+    driver: bridge

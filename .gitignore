@@ -1,0 +1,7 @@
+.env
+.DS_Store
+node_modules/
+bin/
+obj/
+__pycache__/
+*.user
